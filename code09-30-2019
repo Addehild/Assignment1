@@ -1,0 +1,349 @@
+library(dplyr)
+library(ggplot2)
+library(devtools)
+library(readr)
+library(reshape2)
+library(cowplot)
+library(corrplot)
+
+library(tidyverse)
+library(stringr)
+library(forcats)
+library(modelr)
+library(StatProg)
+library(weathermetrics)
+library(viridis) 
+library(RColorBrewer)
+
+###First we must take care of the set of Weather data, measuring windspeed and temperature at different sites
+###However the existing colnames och variables names showed off to be hard to work with
+### Therefore we decided to import them unamed, and to skip the first row(which orginally was used for colnames)
+
+
+
+
+###############################
+
+
+weather <- read_csv("Weather.csv")
+
+colnames(weather) <- make.names(colnames(weather), TRUE)
+
+clean <- weather %>% 
+  filter(Local.Site.Name == "Clinton", Parameter.Name == "Outdoor Temperature") %>% 
+  rename(Temp.mean = Arithmetic.Mean, Date = Date.Local)
+
+clean1 <- weather %>% 
+  filter(Local.Site.Name == "Clinton", Parameter.Name == "Wind Speed - Resultant") %>% 
+  rename(WS.mean = Arithmetic.Mean, Date = Date.Local)
+
+weather <- inner_join(clean, clean1, by = c("Date", "Local.Site.Name")) %>% 
+  select("Date", "WS.mean", "Temp.mean", "Local.Site.Name")
+
+########################
+
+pollution <- read_csv("Pollution.csv")
+
+colnames(pollution) <- make.names(colnames(pollution), TRUE)
+
+clean <- pollution %>% 
+  filter(Local.Site.Name == "Clinton", Parameter.Name == "Ozone") %>% 
+  rename(Ozone.mean = Arithmetic.Mean, Date = Date.Local)
+
+clean1 <- pollution %>% 
+  filter(Local.Site.Name == "Clinton", Parameter.Name == "Nitrogen dioxide (NO2)") %>% 
+  rename(N02.mean = Arithmetic.Mean, Date = Date.Local)
+
+pollution <- inner_join(clean, clean1, by = c("Date", "Local.Site.Name")) %>% 
+  select("Date", "N02.mean", "Ozone.mean", "Local.Site.Name")
+
+########################################################
+
+aqi <- read_csv("AQI.csv")
+
+colnames(aqi) <- make.names(colnames(aqi), TRUE)
+
+aqi <- aqi %>% 
+  filter(county.Name == "Harris") %>%
+  select( "Category" , "Date")
+
+data <- inner_join(aqi, pollution, by = c("Date"))
+
+data <- inner_join(data, weather, by = c("Date", "Local.Site.Name"))
+
+data <- data %>% 
+  mutate(dummy = ifelse(data$Category == "Good" | data$Category == "Moderate", "Good", "Bad")) %>% 
+  mutate(weighted.ozone = data$Ozone.mean*500)
+
+data$Temp.mean.celsius <- fahrenheit.to.celsius(data$Temp.mean)
+
+
+
+
+
+
+# Plot to use 
+
+
+  
+  obs_size  = 0.9
+  line_size = 1.5
+
+  ggplot(data, mapping = aes(x = Date)) + 
+    geom_point(mapping = aes(y = Temp.mean.celsius, color = "Temperature", shape = "Temperature"), size = obs_size) + 
+    geom_point(mapping = aes(y = WS.mean, color = "Wind speed", shape = "Wind speed"), size = obs_size) + 
+    geom_point(mapping = aes(y = weighted.ozone, color = "Ozone", shape = "Ozone"), size = obs_size) + # change shapes
+    geom_point(mapping = aes(y = N02.mean, color = "NO2", shape = "NO2"), size = obs_size) + 
+    geom_smooth(mapping = aes(y = Temp.mean.celsius, color = "Temperature"), size = line_size) + 
+    geom_smooth(mapping = aes(y = WS.mean, colour = "Wind speed"), size = line_size) +
+    geom_smooth(mapping = aes(y = weighted.ozone, colour = "Ozone"), size = line_size) + 
+    geom_smooth(mapping = aes(y = N02.mean, colour = "NO2"), size = line_size) +
+    scale_shape_manual(values = c(15, 16, 17, 18), labels = c("NO2", "Ozone", "Temperature", "Wind speed")) +
+    theme_minimal() +
+    scale_color_manual(values = c("darkgreen", "darkblue", "green", "darkturquoise"), labels = c("NO2", "Ozone", "Temperature", "Wind speed")) +
+    labs(y = "Level of variables",
+         x = "Date",
+         colour = "Parameter", 
+         title = "Time series data showing the relationship between NO2, Ozone, Temperature and Wind speed over 2016-01-01 to 2017-12-31 in Texas", 
+         subtitle = "Scatterplot and smoothed line graph of weather and pollution variables.", 
+         caption = "Ozone and NO2 measured in ppb, temperature in C\u00B0 and wind speed in knots.") +
+    guides(shape = FALSE) + 
+    theme(legend.position = "bottom", legend.title=element_blank()) 
+  
+
+  # <---- fixa namn och variablennamn
+  
+  data_facet <- data %>% 
+    select(c("Date", "N02.mean","weighted.ozone", "WS.mean", "Temp.mean.celsius"))
+  
+  data_facet <- melt(data_facet, id = c("Date"))
+  
+  facet_names <- c("N02.mean" = "NO2", "weighted.ozone" = "Ozone", "WS.mean" = "Wind Speed", "Temp.mean.celsius" = "Temperature in C\u00B0")
+  
+  ggplot(data_facet, aes(x = Date)) +
+    geom_point(aes(y = value)) +
+    facet_grid(rows = data_facet$variable, labeller = as_labeller(facet_names)) +
+    labs(y = "Level of variables",
+         x = "Date",
+         title = "Time series data for NO2, Ozone, Wind Speed and Temperature", 
+         subtitle = "Individual scatterplots of weather and pollution variables", 
+         caption = "Ozone and NO2 measured in ppb, temperature in C\u00B0 and wind speed in knots. (Ozone is scaled with the weight 500)")
+  
+  ### Missing data algorithm
+  
+  dates <- seq(as.Date('2016-01-01'),as.Date('2017-12-31'), by = 1) # Create a vector with all dates from the start of 2016 to 2017-12-31
+  
+  
+  ## A loop which returns all elements which are missing in the Data variable of our dataset 
+  
+  for(i in 1:length(dates)){
+    h <-  as.data.frame(dates %in% data$Date)
+    if(h[i,] == "FALSE"){
+      print(dates[i])
+    } 
+  }
+  
+  #######
+  
+  
+    
+
+# Analysis - relationship between weather and pollution variables
+
+# Correlations  
+corrdata <-  data  %>% 
+select (c("Temp.mean.celsius", "N02.mean", "weighted.ozone"))
+
+cor(corrdata) 
+
+# Regressing the variables on each other and extracting only the R^2
+
+myregressnit <- lm(data$N02.mean ~ data$Temp.mean.celsius)
+summary(myregressnit)$r.squared
+
+myregresso <- lm(data$N02.mean ~ data$weighted.ozone)
+summary(myregresso)$r.squared
+
+myregressoandn <- lm(data$weighted.ozone ~ data$Temp.mean.celsius)
+summary(myregressoandn)$r.squared
+
+# Corrplot
+
+corrplot(cor(corrdata), type = "upper", order = "hclust",
+         col = c("black", "white"), bg = "lightblue")
+
+### Change the factors of the different air quality categories since Unhealthy is considered to be better than unhealthy
+  
+data <- data %>% 
+  mutate(Category = fct_relevel(Category, c("Good", "Moderate", "Unhealthy for Sensitive Groups", "Unhealthy"))) 
+
+data <- data %>% 
+  mutate(dummy = fct_relevel(dummy, c("Good", "Bad"))) 
+
+## Creating separate box plots for each variable   
+
+temperaturebox <-  ggplot(data = data, mapping = aes(y = Temp.mean.celsius, x = Category, fill = Category)) +
+  geom_boxplot(show.legend = FALSE) +
+  labs(y = "Temperature measured in C\u00B0",
+       fill = "Air quality category", 
+       title = "Relationship between air quality and temperature") +
+  theme(plot.title = element_text(size=14)) +
+  scale_fill_manual(values = c("darkgreen", "green", "red", "darkred"), labels = c("Good", "Moderate", "Unhealthy for Sensitive Groups", "Unhealthy")) +
+  theme(axis.title.x=element_blank())
+  
+  ozonebox <-  ggplot(data = data, mapping = aes(y = weighted.ozone, x = Category, fill = Category)) +
+    geom_boxplot(show.legend = FALSE) +
+    labs(y = "Weighted ozone level",
+         fill = "Air quality Category", 
+         title = "Relationship between air quality and ozone level") +
+    theme(plot.title = element_text(size=14)) + 
+    scale_fill_manual(values = c("darkgreen", "green", "red", "darkred"), labels = c("Good", "Moderate", "Unhealthy for Sensitive Groups", "Unhealthy")) +
+    theme(axis.title.x=element_blank())
+
+
+  nitrogenbox <-  ggplot(data = data, mapping = aes(y = N02.mean, x = Category, fill = Category)) +
+    geom_boxplot(show.legend = FALSE) +
+    labs(y = "Nitrogen level",
+         fill = "Air quality category", 
+         title = "Relationship between air quality and nitrogen level") +
+    theme(plot.title = element_text(size=14)) + 
+    scale_fill_manual(values = c("darkgreen", "green", "red", "darkred"), labels = c("Good", "Moderate", "Unhealthy for Sensitive Groups", "Unhealthy")) +
+    theme(axis.title.x=element_blank())
+  
+  windbox <- ggplot(data = data, mapping = aes(y = WS.mean, x = Category, fill = Category)) +
+    geom_boxplot(show.legend = FALSE) +
+    labs(y = "Wind speed in knots",
+         fill = "Air quality category", 
+         title = "Relationship between air quality and wind speed") +
+    theme(plot.title = element_text(size=14)) + 
+    scale_fill_manual(values = c("darkgreen", "green", "red", "darkred"), labels = c("Good", "Moderate", "Unhealthy for Sensitive Groups", "Unhealthy")) +
+    theme(axis.title.x=element_blank())
+  
+  plot_grid(temperaturebox, ozonebox, nitrogenbox, windbox)
+  
+  #### Box plots of every variable with the dummy variables "Good" and "Bad" as categories 
+  
+  dummytemperaturebox <-  ggplot(data = data, mapping = aes(y = Temp.mean.celsius, x = dummy, fill = dummy)) +
+    geom_boxplot(show.legend = FALSE) +
+    labs(y = "Temperature measured in C\u00B0",
+         fill = "Air quality category", 
+         title = "Relationship between air quality and temperature") +
+    theme(plot.title = element_text(size=14)) + 
+    scale_fill_manual(values = c("green", "red"), labels = c("Good", "Bad")) +
+    theme(axis.title.x=element_blank())
+  
+  dummyozonebox <-  ggplot(data = data, mapping = aes(y = weighted.ozone, x = dummy, fill = dummy)) +
+    geom_boxplot(show.legend = FALSE) +
+    labs(y = "Weighted ozone level",
+         fill = "Air quality category", 
+         title = "Relationship between air quality and ozone level") +
+    theme(plot.title = element_text(size=14)) + 
+    scale_fill_manual(values = c("green", "red"), labels = c("Good", "Bad")) +
+    theme(axis.title.x=element_blank())
+  
+  dummynitrogenbox <-  ggplot(data = data, mapping = aes(y = N02.mean, x = dummy, fill = dummy)) +
+    geom_boxplot(show.legend = FALSE) +
+    labs(y = "Nitrogen level",
+         fill = "Air quality category", 
+         title = "Relationship between air quality and nitrogen level") +
+    theme(plot.title = element_text(size=14)) + 
+    scale_fill_manual(values = c("green", "red"), labels = c("Good", "Bad")) +
+    theme(axis.title.x=element_blank())
+  
+  dummywindbox <- ggplot(data = data, mapping = aes(y = WS.mean, x = dummy, fill = dummy)) +
+    geom_boxplot(show.legend = FALSE) +
+    labs(y = "Wind speed in knots",
+         fill = "Air quality category", 
+         title = "Relationship between air quality and wind speed") +
+    theme(plot.title = element_text(size=14)) + 
+    scale_fill_manual(values = c("green", "red"), labels = c("Good", "Bad")) +
+    theme(axis.title.x=element_blank())
+  
+  plot_grid(dummytemperaturebox, dummyozonebox, dummynitrogenbox, dummywindbox)
+ 
+  ## Creating separate scatter plots for each variable    
+  
+  temperaturescatter <- ggplot(data) + 
+    geom_point(mapping = aes(x = Category, y = Temp.mean.celsius, color = Category), show.legend = FALSE) + 
+    labs(y = "Temperature measured in C\u00B0",
+         fill = "Air quality category", 
+         title = "Relationship between air quality and temperature") +
+    theme(plot.title = element_text(size=14)) + 
+    scale_color_manual(values = c("darkgreen", "green", "red", "darkred"), labels = c("Good", "Moderate", "Unhealthy for Sensitive Groups", "Unhealthy")) +
+    theme(axis.title.x=element_blank())
+    
+  
+  ozonescatter <- ggplot(data) + 
+    geom_point(mapping = aes(x = Category, y = weighted.ozone, color = Category), show.legend = FALSE) + 
+    labs(y = "Weighted ozone level",
+         fill = "Air quality category", 
+         title = "Relationship between air quality and ozone level") +
+    theme(plot.title = element_text(size=14)) + 
+    scale_color_manual(values = c("darkgreen", "green", "red", "darkred"), labels = c("Good", "Moderate", "Unhealthy for Sensitive Groups", "Unhealthy")) +
+    theme(axis.title.x=element_blank())
+  
+  nitrogenscatter <- ggplot(data) + 
+    geom_point(mapping = aes(x = Category, y = N02.mean, color = Category), show.legend = FALSE) +
+    labs(y = "Nitrogen level",
+         fill = "Air quality category", 
+         title = "Relationship between air quality and nitrogen level") +
+    theme(plot.title = element_text(size=14)) + 
+    scale_color_manual(values = c("darkgreen", "green", "red", "darkred"), labels = c("Good", "Moderate", "Unhealthy for Sensitive Groups", "Unhealthy")) +
+    theme(axis.title.x=element_blank())
+  
+  windscatter <- ggplot(data) + 
+    geom_point(mapping = aes(x = Category, y = WS.mean, color = Category), show.legend = FALSE) + 
+    labs(y = "Wind speed in knots",
+         fill = "Air quality category", 
+         title = "Relationship between air quality and wind speed") +
+    theme(plot.title = element_text(size=14)) + 
+    scale_color_manual(values = c("darkgreen", "green", "red", "darkred"), labels = c("Good", "Moderate", "Unhealthy for Sensitive Groups", "Unhealthy")) +
+    theme(axis.title.x=element_blank())
+  
+  
+  plot_grid(temperaturescatter, ozonescatter, nitrogenscatter, windscatter)
+  
+  ## dummy 
+  
+  temperaturescatterdummy <- ggplot(data) + 
+    geom_point(mapping = aes(x = dummy, y = Temp.mean.celsius, color = dummy), show.legend = FALSE) + 
+    labs(y = "Temperature measured in C\u00B0",
+         fill = "Air quality category", 
+         title = "Relationship between air quality and temperature") +
+    theme(plot.title = element_text(size=14)) + 
+    scale_color_manual(values = c("green", "red"), labels = c("Good", "Bad")) +
+    theme(axis.title.x=element_blank())
+  
+  
+  ozonescatterdummy <- ggplot(data) + 
+    geom_point(mapping = aes(x = dummy, y = weighted.ozone, color = dummy), show.legend = FALSE) + 
+    labs(y = "Weighted ozone level",
+         fill = "Air quality category", 
+         title = "Relationship between air quality and ozone level") +
+    theme(plot.title = element_text(size=14)) + 
+    scale_color_manual(values = c("green", "red"), labels = c("Good", "Bad")) +
+    theme(axis.title.x=element_blank())
+  
+  nitrogenscatterdummy <- ggplot(data) + 
+    geom_point(mapping = aes(x = dummy, y = N02.mean, color = dummy), show.legend = FALSE) +
+    labs(y = "Nitrogen level",
+         fill = "Air quality category", 
+         title = "Relationship between air quality and nitrogen level") +
+    theme(plot.title = element_text(size=14)) + 
+    scale_color_manual(values = c("green", "red"), labels = c("Good", "Bad")) +
+    theme(axis.title.x=element_blank())
+  
+  windspeedscatterdummy <- ggplot(data) + 
+    geom_point(mapping = aes(x = dummy, y = WS.mean, color = dummy), show.legend = FALSE) + 
+    labs(y = "Wind speed in knots",
+         fill = "Air quality category", 
+         title = "Relationship between air quality and wind speed") +
+    theme(plot.title = element_text(size=14)) + 
+    scale_color_manual(values = c("green", "red"), labels = c("Good", "Bad")) +
+    theme(axis.title.x=element_blank())
+  
+  
+  plot_grid(temperaturescatterdummy, ozonescatterdummy, nitrogenscatterdummy, windspeedscatterdummy)
+
+  f
+    
